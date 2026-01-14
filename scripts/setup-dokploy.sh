@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Configuration
          # dossier contenant docker-compose.yml
-DOKPLOY_URL="http://127.0.0.1:3000"   # adapter si vous utilisez un domaine
+DOKPLOY_URL="http://localhost:3000"   # adapter si vous utilisez un domaine
 ADMIN_EMAIL="admin@example.com"
 ADMIN_PASSWORD="ChangeMeStrong!123"
 ADMIN_NAME="Admin"
