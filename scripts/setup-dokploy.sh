@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Configuration
          # dossier contenant docker-compose.yml
-DOKPLOY_URL="http://localhost:3000"   # adapter si vous utilisez un domaine
+DOKPLOY_URL="http://127.0.0.1:3000"   # adapter si vous utilisez un domaine
 ADMIN_EMAIL="admin@example.com"
 ADMIN_PASSWORD="ChangeMeStrong!123"
 ADMIN_NAME="Admin"
@@ -12,71 +12,61 @@ WAIT_TIMEOUT=30
 
 
  
-echo "2) Attente que l'API soit disponible... (${DOKPLOY_URL}/api)"
-end=$((SECONDS + WAIT_TIMEOUT))
-until curl -sSf "${DOKPLOY_URL}/api" >/dev/null 2>&1 || [ $SECONDS -ge $end ]; do
-  sleep 2
-done
-if ! curl -sSf "${DOKPLOY_URL}/api" >/dev/null 2>&1; then
-  echo "Erreur : l'API Dokploy n'est pas disponible après ${WAIT_TIMEOUT}s" >&2
-  exit 1
+# echo "2) Attente que l'API soit disponible... (${DOKPLOY_URL}/api)"
+# end=$((SECONDS + WAIT_TIMEOUT))
+# until curl -sSf "${DOKPLOY_URL}/api" >/dev/null 2>&1 || [ $SECONDS -ge $end ]; do
+#   echo "L'API n'est pas encore disponible, attente..."
+#   sleep 2
+# done
+# if ! curl -sSf "${DOKPLOY_URL}/api" >/dev/null 2>&1; then
+#   echo "Erreur : l'API Dokploy n'est pas disponible après ${WAIT_TIMEOUT}s" >&2
+#   exit 1
+# fi
+
+echo "2) Création du premier utilisateur admin..."
+if [ ! -f "$API_KEY_FILE" ]; then
+    
+
+  SIGNUP_RESPONSE=$(curl -sS 'http://localhost:3000/api/auth/sign-up/email' \
+    -H 'Accept: */*' \
+    -H 'Accept-Language: fr,fr-FR;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6' \
+    -H 'Connection: keep-alive' \
+    -H 'Origin: http://localhost:3000' \
+    -H 'Referer: http://localhost:3000/register' \
+    -H 'Sec-Fetch-Dest: empty' \
+    -H 'Sec-Fetch-Mode: cors' \
+    -H 'Sec-Fetch-Site: same-origin' \
+    -H 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0' \
+    -H 'content-type: application/json' \
+    -H 'sec-ch-ua: "Microsoft Edge";v="143", "Chromium";v="143", "Not A(Brand";v="24"' \
+    -H 'sec-ch-ua-mobile: ?0' \
+    -H 'sec-ch-ua-platform: "Windows"' \
+    --data-raw "{\"email\":\"${ADMIN_EMAIL}\",\"password\":\"${ADMIN_PASSWORD}\",\"name\":\"${ADMIN_NAME}\",\"lastName\":\"Admin\"}")
+
+  # Extraction du token depuis la réponse JSON
+  API_TOKEN=$(echo "$SIGNUP_RESPONSE" | jq -r '.token // empty')
+
+  if [ -z "$API_TOKEN" ]; then
+    echo "Erreur : impossible d'extraire le token de la réponse d'inscription." >&2
+    echo "Réponse reçue : $SIGNUP_RESPONSE" >&2
+    exit 1
+  fi
+
+    # Sauvegarde du token dans le fichier
+  sudo mkdir -p "$(dirname "$API_KEY_FILE")"
+  echo "$API_TOKEN" | sudo tee "$API_KEY_FILE" >/dev/null
+  sudo chmod 600 "$API_KEY_FILE"
+  echo "Token API sauvegardé dans $API_KEY_FILE"
+
+
+els
+
 fi
 
-echo "3) Vérification s'il existe déjà des utilisateurs..."
-USERS_COUNT=$(curl -sS "${DOKPLOY_URL}/api/user.all" -H "x-api-key: " 2>/dev/null || true)
-# Si l'API requiert une clé pour user.all, on tente sans clé et on parse la réponse
-if echo "$USERS_COUNT" | jq -e '.data | length > 0' >/dev/null 2>&1; then
-  echo "Des utilisateurs existent déjà. Rien à faire."
-  exit 0
-fi
+# Sauvegarde de la clé API Dokploy
+DOKPLOY_API_KEY_FILE="$(dirname "$API_KEY_FILE")/dokploy_api_key.txt"
+echo "$DOKPLOY_API_KEY" | sudo tee "$DOKPLOY_API_KEY_FILE" >/dev/null
+sudo chmod 600 "$DOKPLOY_API_KEY_FILE"
+echo "Clé API Dokploy sauvegardée dans $DOKPLOY_API_KEY_FILE"
 
-echo "4) Création du premier utilisateur via un script headless (Puppeteer)..."
-# Crée et exécute un script Node.js temporaire qui soumet le formulaire d'inscription
-TMP_JS="$(mktemp --suffix=.js)"
-cat > "$TMP_JS" <<'NODE'
-const puppeteer = require('puppeteer');
-(async () => {
-  const url = process.env.DOKPLOY_URL || 'http://localhost:3000';
-  const email = process.env.ADMIN_EMAIL;
-  const password = process.env.ADMIN_PASSWORD;
-  const name = process.env.ADMIN_NAME;
-  const browser = await puppeteer.launch({ args: ['--no-sandbox'] });
-  const page = await browser.newPage();
-  await page.goto(`${url}/register`, { waitUntil: 'networkidle2' });
-  // Ajuster les sélecteurs si nécessaire
-  await page.type('input[name="email"]', email);
-  await page.type('input[name="password"]', password);
-  await page.type('input[name="name"]', name);
-  await Promise.all([
-    page.click('button[type="submit"]'),
-    page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).catch(()=>{})
-  ]);
-  console.log('REGISTER_DONE');
-  await browser.close();
-})();
-NODE
-
-# Exécuter le script (installe puppeteer si nécessaire)
-NODE_ENV=production ADMIN_EMAIL="$ADMIN_EMAIL" ADMIN_PASSWORD="$ADMIN_PASSWORD" ADMIN_NAME="$ADMIN_NAME" DOKPLOY_URL="$DOKPLOY_URL" \
-  bash -lc "npm install puppeteer@latest --no-audit --no-fund >/dev/null && node $TMP_JS"
-
-rm -f "$TMP_JS"
-
-echo "5) Récupération de la clé admin : création d'une API key pour l'utilisateur créé..."
-# Ici on suppose que l'utilisateur peut créer une API key via /api/user.createApiKey en s'authentifiant.
-# On simule une connexion pour obtenir une clé admin temporaire via le formulaire de login (si nécessaire).
-# Pour simplifier, on tente d'appeler directement createApiKey sans x-api-key (adapter si votre instance exige auth)
-CREATE_RESP=$(curl -sS -X POST "${DOKPLOY_URL}/api/user.createApiKey" \
-  -H "Content-Type: application/json" \
-  -d "{\"name\":\"automation-key\",\"metadata\":{\"purpose\":\"bootstrap\"}}")
-
-API_KEY=$(echo "$CREATE_RESP" | jq -r '.data?.key // empty')
-
-if [ -z "$API_KEY" ]; then
-  echo "Échec : impossible de créer la clé API automatiquement. Vérifiez les logs et la configuration d'authentification." >&2
-  exit 1
-fi
-
-echo "$API_KEY" | sudo tee "$API_KEY_FILE" >/dev/null
-sudo chmod 600 "$API_KEY_FILE"
-echo "Clé admin sauvegardée dans $API_KEY_FILE"
+echo "Setup terminé avec succès !"
